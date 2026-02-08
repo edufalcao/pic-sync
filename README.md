@@ -7,6 +7,10 @@
 A web app for syncing profile pictures from WhatsApp to Google Contacts.\
 Matches contacts by phone number using [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js) and [Google People API](https://developers.google.com/people).
 
+## Acknowledgments
+
+This project is a fork of [WhatsApp Contact Sync](https://github.com/guyzyl/whatsapp-contact-sync) by [Guy Zylberberg](https://github.com/guyzyl) and renamed to PicSync. The original idea and core implementation belong to the original author. It is not intended for commercial use and will never be distributed.
+
 ## How To Use
 
 1. Press "Get Started"
@@ -64,7 +68,3 @@ In order to build the seperate images for the backend and frontend, execute the 
 docker build -t picsync-backend -f server/Dockerfile .
 docker build -t picsync-web -f web/Dockerfile .
 ```
-
-## Acknowledgments
-
-This project is a fork of [WhatsApp Contact Sync](https://github.com/guyzyl/whatsapp-contact-sync) by [Guy Zylberberg](https://github.com/guyzyl) and renamed to PicSync. The original idea and core implementation belong to the original author. It is not intended for commercial use and will never be distributed.
