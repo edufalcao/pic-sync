@@ -2,7 +2,7 @@
 
 ## Project
 
-WhatsApp Contact Sync — web app that syncs WhatsApp profile pictures to Google Contacts by matching phone numbers.
+PicSync — web app that syncs WhatsApp profile pictures to Google Contacts by matching phone numbers.
 
 ## Tech Stack
 
@@ -45,7 +45,7 @@ cd web && npm run build      # vue-tsc check + Vite → ./dist
 cd server && npm run prod    # Run compiled JS
 
 # Docker
-docker build -t whasync .    # Full stack (Nginx + Express + Chromium)
+docker build -t picsync .    # Full stack (Nginx + Express + Chromium)
 ```
 
 ## Key Architecture Decisions

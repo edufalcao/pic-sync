@@ -9,8 +9,8 @@ The project provides three Dockerfile options for different deployment strategie
 Single container running both the Vue frontend (via Nginx) and Express backend.
 
 ```bash
-docker build -t whasync .
-docker run --rm -it -p 80:80 whasync
+docker build -t picsync .
+docker run --rm -it -p 80:80 picsync
 ```
 
 **Multi-stage build:**
@@ -29,7 +29,7 @@ docker run --rm -it -p 80:80 whasync
 Standalone Nginx container serving the Vue SPA.
 
 ```bash
-docker build -t whasync-web -f web/Dockerfile .
+docker build -t picsync-web -f web/Dockerfile .
 ```
 
 Requires a separate backend instance. The frontend expects `/api/*` to be proxied to the backend.
@@ -39,7 +39,7 @@ Requires a separate backend instance. The frontend expects `/api/*` to be proxie
 Standalone Node.js container with Chromium.
 
 ```bash
-docker build -t whasync-backend -f server/Dockerfile .
+docker build -t picsync-backend -f server/Dockerfile .
 ```
 
 Exposes port 8080 directly (no Nginx). Includes Chromium for WhatsApp Web.js.
@@ -114,12 +114,12 @@ The `wait %1` ensures the container exits if the Node.js process crashes.
 
 ## Frontend Configuration
 
-The Google OAuth credentials in the frontend (`web/src/pages/GoogleAuth.vue`) are hardcoded constants:
+The frontend fetches Google OAuth credentials from the backend via `GET /api/config`, which exposes:
 
-- `CLIENT_ID` — Google OAuth client ID (public, safe to expose)
-- `API_KEY` — Google API browser key (public, safe to expose)
+- `clientId` — from `GOOGLE_CLIENT_ID` env var (public, safe to expose)
+- `apiKey` — from `GOOGLE_CLIENT_SECRET` env var (used as browser API key, public)
 
-To use your own Google project, update these values and ensure your Google Cloud project has the People API enabled with the correct OAuth redirect URIs.
+No frontend changes are needed when switching Google projects — just update the server `.env` file and ensure your Google Cloud project has the People API enabled with the correct OAuth redirect URIs.
 
 ## Production Considerations
 

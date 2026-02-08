@@ -31,7 +31,7 @@ cd web
 npm install
 ```
 
-Update Google credentials in `web/src/pages/GoogleAuth.vue` (lines 9-10) if using your own Google project.
+The frontend fetches Google credentials from the backend via `GET /api/config`, so no frontend changes are needed.
 
 ## Running
 
@@ -74,14 +74,14 @@ Open `http://localhost:4000` in your browser.
 
 ```bash
 # Full stack
-docker build -t whasync .
-docker run --rm -it -p 80:80 whasync
+docker build -t picsync .
+docker run --rm -it -p 80:80 picsync
 
 # Frontend only
-docker build -t whasync-web -f web/Dockerfile .
+docker build -t picsync-web -f web/Dockerfile .
 
 # Backend only
-docker build -t whasync-backend -f server/Dockerfile .
+docker build -t picsync-backend -f server/Dockerfile .
 ```
 
 ## VS Code Configuration
@@ -100,7 +100,7 @@ The project includes VS Code launch and task configs in `.vscode/`.
 ## Project Structure
 
 ```
-whatsapp-contact-sync/
+picsync/
 ├── interfaces/
 │   └── api.ts               # Shared types (imported by both web/ and server/)
 ├── server/

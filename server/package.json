@@ -9,7 +9,7 @@
     "prod": "node build/server/main.js",
     "build": "tsc"
   },
-  "author": "guyzyl",
+  "author": "",
   "license": "ISC",
   "dependencies": {
     "body-parser": "^2.2.0",

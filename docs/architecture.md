@@ -1,6 +1,6 @@
 # Architecture Overview
 
-WhatsApp Contact Sync is a full-stack web application that syncs WhatsApp profile pictures to Google Contacts by matching phone numbers.
+PicSync is a full-stack web application that syncs WhatsApp profile pictures to Google Contacts by matching phone numbers.
 
 ## System Diagram
 
@@ -123,7 +123,7 @@ The `interfaces/api.ts` file is imported by both frontend and backend, ensuring 
 ## Project Structure
 
 ```
-whatsapp-contact-sync/
+picsync/
 ├── interfaces/api.ts        # Shared TypeScript types
 ├── server/                  # Express backend
 │   ├── main.ts              # Entry point, middleware
