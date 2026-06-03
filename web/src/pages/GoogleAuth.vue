@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // @ts-nocheck
-// This is indeed a bad solution, but the Google imports just don't play nice with Typesciprt...
+// This is indeed a bad solution, but the Google imports just don't play nice with Typescript...
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { event } from "vue-gtag";
@@ -8,9 +8,7 @@ import { event } from "vue-gtag";
 const router = useRouter();
 
 const CLIENT_ID = ref("");
-const API_KEY = ref("");
 const gisLoaded = ref(false);
-const gapiLoaded = ref(false);
 const configLoaded = ref(false);
 const tokenClient = ref<any>(undefined);
 
@@ -19,7 +17,6 @@ async function loadConfig() {
   const res = await fetch("/api/config", { credentials: "include" });
   const data = await res.json();
   CLIENT_ID.value = data.clientId;
-  API_KEY.value = data.apiKey;
   if (!data.clientId) {
     console.error("Google Client ID not configured on the server.");
     return;
@@ -30,7 +27,6 @@ async function loadConfig() {
 
 function tryInit() {
   if (configLoaded.value && gisLoaded.value) initGis();
-  if (configLoaded.value && gapiLoaded.value) initGapi();
 }
 
 function addJSSrc(url: string, onLoad: () => void = () => {}) {
@@ -52,19 +48,6 @@ function initGis() {
   });
 }
 
-function initGapi() {
-  gapi.load("client", initGapiClient);
-}
-
-async function initGapiClient() {
-  await gapi.client.init({
-    apiKey: API_KEY.value,
-    discoveryDocs: [
-      "https://www.googleapis.com/discovery/v1/apis/people/v1/rest",
-    ],
-  });
-}
-
 function handleAuthClick() {
   tokenClient.value.requestAccessToken({ prompt: "consent" });
 }
@@ -74,7 +57,7 @@ async function onSignIn(resp: any) {
     throw resp;
   }
   event("google_authorized", { method: "Google" });
-  const token = gapi.client.getToken();
+  const token = resp;
   fetch("/api/init_gapi", {
     credentials: "include",
     method: "POST",
@@ -94,8 +77,10 @@ async function onSignIn(resp: any) {
 
 onMounted(() => {
   loadConfig();
-  addJSSrc("https://accounts.google.com/gsi/client", () => { gisLoaded.value = true; tryInit(); });
-  addJSSrc("https://apis.google.com/js/api.js", () => { gapiLoaded.value = true; tryInit(); });
+  addJSSrc("https://accounts.google.com/gsi/client", () => {
+    gisLoaded.value = true;
+    tryInit();
+  });
 });
 </script>
 
@@ -112,7 +97,7 @@ onMounted(() => {
       <div class="mt-6">
         <button
           @click="handleAuthClick"
-          :disabled="!tokenClient || !gapiLoaded"
+          :disabled="!tokenClient"
           id="signin-button"
           class="btn btn-outline border-white/[0.06] bg-base-100/50 hover:bg-base-300 hover:border-primary/30 backdrop-blur-sm gap-3 w-full h-12 transition-all duration-200"
         >
