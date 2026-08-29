@@ -1,9 +1,12 @@
 import {
   Client,
   Contact,
+  LocalAuth,
   MessageMedia,
   RemoteWebCacheOptions,
 } from "whatsapp-web.js";
+import fs from "fs";
+import path from "path";
 
 import { sendEvent } from "./ws";
 import { Base64 } from "./types";
@@ -27,8 +30,24 @@ const clientOptions = {
   } as RemoteWebCacheOptions,
 };
 
-export function initWhatsApp(id: string): Client {
-  const client = new Client(clientOptions);
+// Persisted WhatsApp sessions live on disk keyed by the browser's `uid`
+// cookie, so a QR scan is only ever needed once (survives server restarts).
+// Only logout may delete these — the WS cleanup timer must not.
+const authDataPath = path.join(process.cwd(), ".wwebjs_auth");
+
+export function deleteWhatsAppAuth(uid: string): void {
+  try {
+    fs.rmSync(path.join(authDataPath, `session-${uid}`), { recursive: true, force: true });
+  } catch (e) {
+    console.error(`Failed to delete WhatsApp auth data for ${uid}:`, e);
+  }
+}
+
+export function initWhatsApp(id: string, uid: string): Client {
+  const client = new Client({
+    ...clientOptions,
+    authStrategy: new LocalAuth({ clientId: uid, dataPath: authDataPath }),
+  });
 
   client.on("qr", (qr: string) => {
     let ws = getFromCache(id, "ws");

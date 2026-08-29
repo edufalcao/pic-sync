@@ -8,9 +8,14 @@ import patch from "express-ws/lib/add-ws-method";
 import { WAState } from "whatsapp-web.js";
 
 import { SessionStatus, SyncOptions } from "../../interfaces/api";
-import { initWhatsApp } from "../src/whatsapp";
+import { initWhatsApp, deleteWhatsAppAuth } from "../src/whatsapp";
 import { initSync } from "../src/sync";
-import { generateGoogleAuthUrl, getOAuth2ClientFromCode } from "../src/gapi";
+import {
+  generateGoogleAuthUrl,
+  getOAuth2ClientFromCode,
+  getOAuth2ClientFromStorage,
+  revokeGoogleAccess,
+} from "../src/gapi";
 import { deleteFromCache, getFromCache, setInCache } from "../src/cache";
 import { enforcePayments } from "../main";
 import { checkPurchase } from "../src/payments";
@@ -57,6 +62,8 @@ router.ws("/ws", (ws: WebSocket, req: Request) => {
 
 // Used by route guard
 router.get("/status", async (req: Request, res: Response) => {
+  const uid: string = (req as any).uid;
+
   let whatsappConnected = false;
   try {
     whatsappConnected =
@@ -64,9 +71,20 @@ router.get("/status", async (req: Request, res: Response) => {
       WAState.CONNECTED;
   } catch {}
 
+  /*
+    Google: use the cached client if present; on a miss (restart, TTL, new
+    process) silently rebuild it from the refresh token persisted on disk, so
+    users stay connected across server restarts without re-consenting.
+  */
+  let gAuth = getFromCache(req.sessionID, "gauth");
+  if (!gAuth) {
+    gAuth = getOAuth2ClientFromStorage(uid);
+    if (gAuth) setInCache(req.sessionID, "gauth", gAuth);
+  }
+
   const status: SessionStatus = {
     whatsappConnected,
-    googleConnected: getFromCache(req.sessionID, "gauth") !== undefined,
+    googleConnected: gAuth !== undefined && gAuth !== null,
     enforcePayments,
     purchased: enforcePayments
       ? getFromCache(req.sessionID, "purchased")
@@ -77,6 +95,7 @@ router.get("/status", async (req: Request, res: Response) => {
 });
 
 router.get("/init_whatsapp", async (req: Request, res: Response) => {
+  const uid: string = (req as any).uid;
   if (getFromCache(req.sessionID, "whatsapp") !== undefined)
     try {
       const client = getFromCache(req.sessionID, "whatsapp");
@@ -84,7 +103,7 @@ router.get("/init_whatsapp", async (req: Request, res: Response) => {
       client.destroy();
     } catch (e) {}
 
-  const client = initWhatsApp(req.sessionID);
+  const client = initWhatsApp(req.sessionID, uid);
   setInCache(req.sessionID, "whatsapp", client);
   res.send("{}");
 });
@@ -112,7 +131,11 @@ router.get("/google_callback", async (req: Request, res: Response) => {
 
   const redirectUri = `${req.protocol}://${req.get("host")}/api/google_callback`;
   try {
-    const gAuth = await getOAuth2ClientFromCode(code as string, redirectUri);
+    const gAuth = await getOAuth2ClientFromCode(
+      (req as any).uid,
+      code as string,
+      redirectUri
+    );
     setInCache(req.sessionID, "gauth", gAuth);
     res.redirect("/options");
   } catch (e) {
@@ -131,6 +154,78 @@ router.post("/check_purchase", async (req: Request, res: Response) => {
   setInCache(req.sessionID, "purchased", purchased);
   setInCache(req.sessionID, "email", email);
   res.send({ purchased });
+});
+
+/*
+  Disconnect one or both accounts: `scope` = "whatsapp" | "google" | "all".
+  This is the ONLY path that deletes persisted state — the WS cleanup timer
+  and cache expiry only ever drop the in-memory copies.
+*/
+router.post("/logout", async (req: Request, res: Response) => {
+  const uid: string = (req as any).uid;
+  const scope: string = req.body?.scope || "all";
+
+  // Cancel any pending WS cleanup so it can't race with the teardown below.
+  const pendingCleanup = getFromCache(req.sessionID, "cleanup");
+  if (pendingCleanup !== undefined) {
+    clearTimeout(pendingCleanup);
+    deleteFromCache(req.sessionID, "cleanup");
+  }
+
+  if (scope === "whatsapp" || scope === "all") {
+    const client = getFromCache(req.sessionID, "whatsapp");
+    deleteFromCache(req.sessionID, "whatsapp");
+    if (client !== undefined) {
+      try {
+        await client.destroy();
+      } catch (e) {}
+    }
+    // Remove the on-disk WhatsApp session so the next connect requires a
+    // fresh QR scan (otherwise LocalAuth would silently restore the account).
+    deleteWhatsAppAuth(uid);
+  }
+
+  if (scope === "google" || scope === "all") {
+    await revokeGoogleAccess(uid);
+    deleteFromCache(req.sessionID, "gauth");
+  }
+
+  // The session (and every cache key) is about to be rotated. Remember the
+  // state that survives this logout so it can be re-keyed to the new
+  // session ID afterwards — otherwise a google-only logout would orphan the
+  // still-connected WhatsApp client and force a needless re-scan.
+  const oldSessionID = req.sessionID;
+  const keptWhatsapp =
+    scope === "google" ? getFromCache(oldSessionID, "whatsapp") : undefined;
+  const keptPurchased = getFromCache(oldSessionID, "purchased");
+  const keptEmail = getFromCache(oldSessionID, "email");
+
+  // Drop the websocket and remaining session-bound entries.
+  const ws = getFromCache(oldSessionID, "ws");
+  deleteFromCache(oldSessionID, "ws");
+  deleteFromCache(oldSessionID, "whatsapp");
+  deleteFromCache(oldSessionID, "gauth");
+  deleteFromCache(oldSessionID, "purchased");
+  deleteFromCache(oldSessionID, "email");
+  if (ws !== undefined && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+  }
+
+  // Rotate the session ID so nothing from the old session carries over,
+  // then carry the surviving state over to the new one.
+  req.session.regenerate((err) => {
+    if (err) console.error("Failed to regenerate session on logout:", err);
+    if (keptWhatsapp !== undefined) {
+      setInCache(req.sessionID, "whatsapp", keptWhatsapp);
+    }
+    if (keptPurchased !== undefined) {
+      setInCache(req.sessionID, "purchased", keptPurchased);
+    }
+    if (keptEmail !== undefined) {
+      setInCache(req.sessionID, "email", keptEmail);
+    }
+    res.send("{}");
+  });
 });
 
 export default router;

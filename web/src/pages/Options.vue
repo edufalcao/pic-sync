@@ -2,6 +2,8 @@
 import { reactive } from "vue";
 import { useRouter } from "vue-router";
 
+import AccountChips from "../components/AccountChips.vue";
+
 const router = useRouter();
 
 interface Option {
@@ -47,7 +49,8 @@ function startSync() {
 
 <template>
   <div class="flex-1 flex items-center justify-center px-4 py-12">
-    <div class="max-w-lg w-full bg-base-100 rounded-2xl border border-white/[0.06] shadow-xl shadow-black/20 p-8">
+    <div class="max-w-lg w-full">
+      <div class="bg-base-100 rounded-2xl border border-white/[0.06] shadow-xl shadow-black/20 p-8">
       <h1 class="text-2xl font-semibold tracking-tight text-base-content">
         Sync Options
       </h1>
@@ -77,6 +80,9 @@ function startSync() {
       <button class="btn btn-primary w-full mt-6 h-12 shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-shadow duration-300" @click="startSync()">
         Start Sync
       </button>
+      </div>
+
+      <AccountChips />
     </div>
   </div>
 </template>

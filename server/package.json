@@ -4,8 +4,8 @@
   "description": "",
   "main": "main.ts",
   "scripts": {
-    "serve": "ts-node .",
-    "dev": "nodemon --exec 'ts-node' .",
+    "serve": "node --env-file=.env -r ts-node/register/transpile-only .",
+    "dev": "nodemon --exec 'node --env-file=.env -r ts-node/register/transpile-only' .",
     "prod": "node build/server/main.js",
     "build": "tsc",
     "test": "node --require ts-node/register/transpile-only --test src/**/*.test.ts"

@@ -1,4 +1,5 @@
 import cors from "cors";
+import crypto from "crypto";
 import express from "express";
 import { Request, Response } from "express";
 import expressWs from "express-ws";
@@ -19,6 +20,19 @@ const port = 8080;
 
 const isProd = process.env.NODE_ENV == "production";
 export const enforcePayments = process.env.ENFORCE_PAYMENTS == "true" || false;
+
+/*
+  Log — but never crash on — unexpected errors. whatsapp-web.js occasionally
+  throws from deep inside its Puppeteer bridge (e.g. "Failed to add page
+  binding" when clients collide); letting those bubble up would take the whole
+  server — and every active sync — down with it.
+*/
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+});
 
 /*
   Setup the session and cookie parser.
@@ -78,6 +92,28 @@ app.use(
 
 // To fix 304 responses.
 app.disable("etag");
+
+/*
+  Assign every browser a long-lived, stable identifier (`uid` cookie).
+  The express sessionID is not stable across server restarts (MemoryStore is
+  wiped and a new ID is issued), so persisted state on disk (WhatsApp auth
+  sessions, Google refresh tokens) is keyed by this cookie instead.
+*/
+app.use((req: Request, res: Response, next: CallableFunction) => {
+  const oneYear = 365 * 24 * 60 * 60 * 1000;
+  let uid: string = req.cookies?.uid;
+  if (!uid || typeof uid !== "string" || !/^[a-f0-9]{48}$/.test(uid)) {
+    uid = crypto.randomBytes(24).toString("hex");
+    res.cookie("uid", uid, {
+      maxAge: oneYear,
+      httpOnly: true,
+      secure: isProd,
+      sameSite: "lax",
+    });
+  }
+  (req as any).uid = uid;
+  next();
+});
 
 const routePrefix = process.env.ROUTE_PREFIX || "";
 app.use(routePrefix, router);

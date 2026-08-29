@@ -1,0 +1,6 @@
+{
+  "watch": ["main.ts", "routes", "src", "../interfaces"],
+  "ext": "ts,js,json",
+  "ignore": ["build", "node_modules", ".wwebjs_auth", ".wwebjs_cache", ".data"],
+  "delay": 500
+}

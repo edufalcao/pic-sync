@@ -4,6 +4,7 @@ import { event } from "vue-gtag";
 import { EventType, SyncProgress } from "../../../interfaces/api";
 import { addHandler, sendEvent } from "../services/ws";
 import { enforcePayments } from "../settings";
+import AccountChips from "../components/AccountChips.vue";
 
 interface ManualSyncData {
   existingPhoto: string | null;
@@ -195,6 +196,7 @@ onMounted(() => {
         </div>
       </div>
 
+      <AccountChips v-if="syncProgress === 100" />
     </div>
   </div>
 </template>

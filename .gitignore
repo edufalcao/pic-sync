@@ -140,4 +140,6 @@ token.json
 credentials.json
 build
 .wwebjs_cache
+.wwebjs_auth
+.data
 .DS_Store
