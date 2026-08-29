@@ -5,15 +5,34 @@ import { Base64 } from "./types";
 
 const pageSize: number = 250;
 
-export function googleLogin(
-  token: typeof google.Auth.AccessTokenResponse
-): Auth.OAuth2Client {
+export function generateGoogleAuthUrl(
+  redirectUri: string,
+  state: string
+): string {
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET
+    process.env.GOOGLE_CLIENT_SECRET,
+    redirectUri
   );
-  oauth2Client.setCredentials(token);
+  return oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: "https://www.googleapis.com/auth/contacts",
+    state,
+    prompt: "consent",
+  });
+}
 
+export async function getOAuth2ClientFromCode(
+  code: string,
+  redirectUri: string
+): Promise<Auth.OAuth2Client> {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    redirectUri
+  );
+  const { tokens } = await oauth2Client.getToken(code);
+  oauth2Client.setCredentials(tokens);
   return oauth2Client;
 }
 
@@ -43,11 +62,15 @@ export async function listContacts(
           <SimpleContact>{
             id: connection.resourceName,
             name: connection.names?.find((name) => name.displayName)?.displayName,
+            // Keep the E.164 `canonicalForm` when Google could parse the number,
+            // otherwise fall back to the raw `value` so numbers saved in a local
+            // format (no +CC) are normalized later against the user's region
+            // instead of being silently dropped.
             numbers: connection
-              .phoneNumbers!.filter((phoneNumber) => phoneNumber.canonicalForm)
-              .map((phoneNumber) =>
-                phoneNumber.canonicalForm!.replace("+", "")
-              ),
+              .phoneNumbers!.map(
+                (phoneNumber) => phoneNumber.canonicalForm ?? phoneNumber.value
+              )
+              .filter((number): number is string => Boolean(number)),
             hasPhoto: !connection.photos // Check if photos contain only the "default" photo
               ?.map((photo) => photo.default)
               .every((v) => v === true),

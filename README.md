@@ -23,7 +23,7 @@ The whole process takes about 2 minutes. Syncing runs at ~1 photo per second (du
 
 ## How to Run Locally
 
-In order for the backend to function, it requires an OAuth client id and secret + an API key.\
+In order for the backend to function, it requires an OAuth 2.0 client ID and secret.\
 Since (for obvious reasons) this is a private app, you will need to create one for your own.\
 You can see instructions on how to do that [here](https://developers.google.com/workspace/guides/create-credentials).\
 Once you do that, create the file `server/.env`, and set the following environment variables:
@@ -31,7 +31,11 @@ Once you do that, create the file `server/.env`, and set the following environme
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 
-The frontend fetches `CLIENT_ID` and `API_KEY` from the backend via `GET /api/config`, so no frontend changes are needed.
+You also need to add the **Authorized Redirect URI** matching your setup to your OAuth 2.0 client in the [Google Cloud Console](https://console.cloud.google.com):
+
+- Local dev: `http://localhost:8080/api/google_callback`
+- Docker (port 80): `http://localhost/api/google_callback`
+- Production: `https://<your-domain>/api/google_callback`
 
 Once that's done, you can go ahead and run the app:
 
@@ -59,12 +63,12 @@ In order to build and run the complete app, you need to run the following comman
 
 ```bash
 docker build -t picsync .
-docker run --rm -it -p 80:80 picsync
+docker run --rm -it -p 80:80 --env-file server/.env picsync
 ```
 
 In order to build the seperate images for the backend and frontend, execute the following commands from the projects main directory:
 
 ```bash
-docker build -t picsync-backend -f server/Dockerfile .
+docker build -t picsync-backend --env-file server/.env -f server/Dockerfile .
 docker build -t picsync-web -f web/Dockerfile .
 ```
