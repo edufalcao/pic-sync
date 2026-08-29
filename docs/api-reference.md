@@ -4,6 +4,13 @@ All REST endpoints are served from the Express backend on port 8080. In producti
 
 All requests use `credentials: "include"` for cookie-based session management.
 
+Two cookies drive state:
+
+| Cookie | Purpose |
+|--------|---------|
+| `connect.sid` | Express session (24h) — keys the in-memory session cache |
+| `uid` | Long-lived (1yr, httpOnly) stable identifier — keys all persisted on-disk state |
+
 ## REST Endpoints
 
 ### GET `/status`
@@ -23,7 +30,7 @@ Returns the current session state.
 | Field | Type | Description |
 |-------|------|-------------|
 | `whatsappConnected` | `boolean` | WhatsApp client is in `CONNECTED` state |
-| `googleConnected` | `boolean` | Google OAuth token exists in cache |
+| `googleConnected` | `boolean` | Google OAuth client in cache, or a persisted refresh token was found and the client was rebuilt |
 | `enforcePayments` | `boolean` | Payment gate is enabled server-side |
 | `purchased` | `boolean` | User has verified purchase (or payments not enforced) |
 
@@ -31,7 +38,7 @@ Returns the current session state.
 
 ### GET `/init_whatsapp`
 
-Initializes a WhatsApp Web client. Destroys any existing client for this session first.
+Initializes a WhatsApp Web client. Destroys any existing client for this session first. The client uses `LocalAuth` keyed by the `uid` cookie, so a previously linked session restores from disk without a QR scan.
 
 **Response:** `{}`
 
@@ -41,23 +48,44 @@ Initializes a WhatsApp Web client. Destroys any existing client for this session
 
 ---
 
-### POST `/init_gapi`
+### GET `/google_auth_start`
 
-Stores the Google OAuth access token in the server session.
+Begins the server-side OAuth 2.0 authorization code flow. Generates a CSRF `state` token (stored in the session cache), builds the Google consent URL with the `contacts` scope and `access_type=offline`, and 302-redirects the browser to it.
+
+**Response:** `302` redirect to `accounts.google.com`
+
+---
+
+### GET `/google_callback`
+
+OAuth 2.0 redirect target (must be registered as an Authorized Redirect URI). Validates the `state` parameter, exchanges the authorization code for tokens, persists the refresh token on disk keyed by `uid`, caches the authorized client in the session, and redirects to `/options`.
+
+**Query parameters:** `code`, `state`, `error` (set by Google on denial)
+
+**Response:** `302` redirect to `/options` on success, or `/?error=...` on failure
+
+---
+
+### POST `/logout`
+
+Disconnects one or both accounts. This is the **only** path that deletes persisted state.
 
 **Request body:**
 ```json
 {
-  "token": {
-    "access_token": "ya29.a0...",
-    "token_type": "Bearer",
-    "expires_in": 3599,
-    "scope": "https://www.googleapis.com/auth/contacts"
-  }
+  "scope": "all"
 }
 ```
 
-**Response:** Redirect to `/options`
+| Param | Values | Actions |
+|-------|--------|---------|
+| `scope` | `"whatsapp"` | Destroys the WhatsApp client, deletes the on-disk `LocalAuth` session (next connect requires a QR scan) |
+| | `"google"` | Revokes the Google grant at `oauth2.googleapis.com/revoke`, deletes the stored refresh token |
+| | `"all"` (default) | Both of the above |
+
+Also cancels any pending WS cleanup timer, closes the WebSocket, clears session cache entries, and rotates the session ID.
+
+**Response:** `{}`
 
 ---
 
@@ -279,7 +307,7 @@ interface SyncOptions {
 interface SimpleContact {
   id: string;          // Google resourceName
   name?: string;       // Display name
-  numbers: string[];   // Canonical phone numbers (no "+")
+  numbers: string[];   // Phone numbers: E.164 canonicalForm when Google could parse, else raw value (no "+")
   hasPhoto: boolean;   // Has non-default photo
   photoUrl?: string;   // Primary photo URL
 }

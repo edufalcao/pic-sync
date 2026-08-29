@@ -7,7 +7,7 @@ PicSync — web app that syncs WhatsApp profile pictures to Google Contacts by m
 ## Tech Stack
 
 - **Frontend:** Vue 3 + TypeScript, Vite, TailwindCSS 4, DaisyUI 5, Vue Router 4
-- **Backend:** Node.js + Express 4 + TypeScript, whatsapp-web.js, Google People API, Puppeteer
+- **Backend:** Node.js + Express 5 + TypeScript, whatsapp-web.js, Google People API, Puppeteer
 - **Infra:** Docker (multi-stage), Nginx reverse proxy, LRU cache sessions
 
 ## Structure
@@ -17,15 +17,19 @@ interfaces/api.ts        — Shared types/enums (EventType, SessionStatus, SyncP
 server/main.ts           — Express entry: middleware, session, CORS
 server/routes/api.ts     — REST endpoints + WebSocket handler
 server/src/sync.ts       — Core sync logic: phone matching, rate limiting, manual/auto modes
-server/src/whatsapp.ts   — WhatsApp client lifecycle, QR flow, contact loading, photo download
-server/src/gapi.ts       — Google OAuth, People API contact listing, photo updates
-server/src/cache.ts      — LRU cache (4096 entries, 1hr TTL), key format: {sessionID}-{key}
+server/src/whatsapp.ts   — WhatsApp client lifecycle (LocalAuth persistence), QR flow, contact loading, photo download
+server/src/gapi.ts       — Google OAuth (server-side code flow), People API contact listing, photo updates, token revoke
+server/src/phone.ts      — libphonenumber-js normalization + matching candidates (with tests in phone.test.ts)
+server/src/persist.ts    — File-based store (.data/persist.json) for Google refresh tokens, keyed by uid cookie
+server/src/cache.ts      — LRU cache (4096 entries, 1hr sliding TTL), key format: {sessionID}-{key}
 server/src/ws.ts         — WebSocket send + request/response pattern (30s timeout)
 server/src/payments.ts   — BuyMeACoffee API + Redis purchase verification
 web/src/main.ts          — Vue app, router, navigation guards (enforces auth flow)
 web/src/pages/           — 7 route components (Home, WhatsApp, GoogleAuth, Options, Sync, Contribute, Privacy)
+web/src/components/      — Shared components (AccountChips: disconnect chips + logout modal)
 web/src/services/ws.ts   — WebSocket client, event pub/sub
 web/src/settings.ts      — Global enforcePayments deferred
+server/nodemon.json      — Dev autoreload config (watches ts + shared interfaces; ignores build/.data/.wwebjs_auth)
 assets/nginx.conf        — SPA routing + /api/* proxy to :8080 with WebSocket support
 assets/entrypoint.sh     — Docker startup: Express first, then Nginx
 ```
@@ -53,7 +57,8 @@ docker build -t picsync .    # Full stack (Nginx + Express + Chromium)
 - **No frontend store** — Backend sessions are the source of truth; `/api/status` checked on every route change
 - **WebSocket for everything real-time** — QR codes, sync progress, manual photo confirmation
 - **Shared types** — `interfaces/api.ts` imported by both packages for type-safe WebSocket protocol
-- **Rate limiting** — 1 photo per 1.5s (40/min) for Google People API (limit is 60/min)
+- **Rate limiting** — 1 photo per 1.5s (~40/min) for Google People API (limit is 60/min); transient 5xx/429 retried with backoff
+- **Session persistence** — stable `uid` cookie keys on-disk state: WhatsApp LocalAuth (`.wwebjs_auth`) + Google refresh tokens (`.data/persist.json`); `/api/logout` (scope: whatsapp/google/all) is the only path that deletes persisted state
 - **Brazilian phone number fallback** — Handles 9th digit transition (insert/remove "9" after area code for country code 55)
 - **Graceful cleanup** — 5-minute timeout before destroying WhatsApp client on WS disconnect
 
@@ -71,7 +76,7 @@ Auto-set in Docker: `RUNNING_IN_DOCKER`, `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD`
 - Web: ESM modules, ESNext target
 - Styling: TailwindCSS utility classes + DaisyUI components, no scoped CSS
 - Error handling: try-catch with console.error logging; sync errors sent via WebSocket events
-- No test suite currently in the project
+- Tests: `cd server && npm test` (node:test + ts-node, currently phone-matching only)
 
 ## Documentation
 

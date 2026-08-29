@@ -19,7 +19,7 @@ This project is a fork of [WhatsApp Contact Sync](https://github.com/guyzyl/what
 4. Choose your sync options
 5. That's it!
 
-The whole process takes about 2 minutes. Syncing runs at ~1 photo per second (due to Google API rate limits).
+The whole process takes about 2 minutes. Syncing runs at ~1 photo every 1.5 seconds (due to Google API rate limits). You can disconnect either account at any time using the account chips on the options/sync pages.
 
 ## How to Run Locally
 
@@ -30,10 +30,11 @@ Once you do that, create the file `server/.env`, and set the following environme
 
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
+- `SESSION_SECRET` (recommended — any long random string; defaults to a hardcoded value)
 
 You also need to add the **Authorized Redirect URI** matching your setup to your OAuth 2.0 client in the [Google Cloud Console](https://console.cloud.google.com):
 
-- Local dev: `http://localhost:8080/api/google_callback`
+- Local dev (Vite on :4000): `http://localhost:4000/api/google_callback`
 - Docker (port 80): `http://localhost/api/google_callback`
 - Production: `https://<your-domain>/api/google_callback`
 
@@ -49,7 +50,13 @@ npm run dev
 cd web
 npm install
 npm run dev
+
+# Run backend tests
+cd server
+npm test
 ```
+
+Once connected, both accounts stay authorized across restarts: the WhatsApp session is persisted on disk (`.wwebjs_auth`) and the Google refresh token in `.data/`, so no QR rescan or re-consent is needed unless you explicitly disconnect.
 
 ## Build Docker Images
 
@@ -66,7 +73,13 @@ docker build -t picsync .
 docker run --rm -it -p 80:80 --env-file server/.env picsync
 ```
 
-In order to build the seperate images for the backend and frontend, execute the following commands from the projects main directory:
+To keep WhatsApp sessions and Google authorizations across container restarts, mount a volume for the persisted state:
+
+```bash
+docker run --rm -it -p 80:80 --env-file server/.env -v picsync-data:/app/server/.data -v picsync-wa:/app/server/.wwebjs_auth picsync
+```
+
+In order to build the separate images for the backend and frontend, execute the following commands from the project's main directory:
 
 ```bash
 docker build -t picsync-backend --env-file server/.env -f server/Dockerfile .

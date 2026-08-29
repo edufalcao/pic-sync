@@ -10,19 +10,32 @@ Single container running both the Vue frontend (via Nginx) and Express backend.
 
 ```bash
 docker build -t picsync .
-docker run --rm -it -p 80:80 picsync
+docker run --rm -it -p 80:80 --env-file server/.env picsync
 ```
 
 **Multi-stage build:**
 
-1. **web-build** (Node 21 Alpine) — Installs frontend deps, builds Vue app with Vite
-2. **server-build** (Node 21 Alpine) — Installs backend deps, compiles TypeScript, prunes production deps, runs `node-prune`
-3. **Final** (Node 21 Alpine) — Installs Chromium + Nginx, copies built assets from both stages
+1. **web-build** (Node 26 Alpine) — Installs frontend deps, builds Vue app with Vite
+2. **server-build** (Node 26 Alpine) — Installs backend deps, compiles TypeScript, prunes production deps, runs `node-prune`
+3. **Final** (Node 26 Alpine) — Installs Chromium + Nginx, copies built assets from both stages
 
 **Runtime architecture:**
 - Nginx serves static files from `/var/www/html` on port 80
 - Nginx proxies `/api/*` to Express on `localhost:8080`
 - `entrypoint.sh` starts Express first, waits for port 8080, then starts Nginx
+
+### Persisting Session State
+
+WhatsApp auth sessions (`.wwebjs_auth/`) and Google refresh tokens (`.data/`) live inside the container's `/app/server` working directory. Mount volumes so they survive container replacement:
+
+```bash
+docker run --rm -it -p 80:80 --env-file server/.env \
+  -v picsync-data:/app/server/.data \
+  -v picsync-wa:/app/server/.wwebjs_auth \
+  picsync
+```
+
+Without volumes, state still survives process restarts within the same container but is lost when the container is recreated.
 
 ### Frontend Only (`web/Dockerfile`)
 
@@ -114,12 +127,16 @@ The `wait %1` ensures the container exits if the Node.js process crashes.
 
 ## Frontend Configuration
 
-The frontend fetches Google OAuth credentials from the backend via `GET /api/config`, which exposes:
+The frontend requires no credential configuration — Google OAuth is a server-side flow:
 
-- `clientId` — from `GOOGLE_CLIENT_ID` env var (public, safe to expose)
-- `apiKey` — from `GOOGLE_CLIENT_SECRET` env var (used as browser API key, public)
+1. Set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in the server environment
+2. Register the **Authorized Redirect URI** for your deployment in the Google Cloud Console (the backend derives it from the incoming request's protocol + host):
+   - Local dev (Vite on :4000): `http://localhost:4000/api/google_callback`
+   - Docker (port 80): `http://localhost/api/google_callback`
+   - Production: `https://<your-domain>/api/google_callback`
+3. Ensure the People API is enabled on the Google Cloud project
 
-No frontend changes are needed when switching Google projects — just update the server `.env` file and ensure your Google Cloud project has the People API enabled with the correct OAuth redirect URIs.
+Switching Google projects only requires updating the server `.env` — no frontend changes.
 
 ## Production Considerations
 
@@ -128,14 +145,21 @@ No frontend changes are needed when switching Google projects — just update th
 - Set `NODE_ENV=production` to enable secure (HTTPS-only) cookies
 - Set `ORIGIN` to your actual domain
 
+### Persisted State
+- WhatsApp sessions (`.wwebjs_auth/`) and Google refresh tokens (`.data/persist.json`) are keyed by the browser's `uid` cookie
+- Mount volumes for both directories (see above) or users re-authenticate after container recreation
+- The Google refresh token file is sensitive — back it up and restrict access accordingly
+- `POST /api/logout` revokes the Google grant and deletes the WhatsApp session; it's the only path that clears persisted state
+
 ### Resource Usage
 - Each active WhatsApp session runs a headless Chromium instance
 - LRU cache is limited to 4096 sessions (tune `max` in `cache.ts` if needed)
-- WhatsApp clients are destroyed 5 minutes after WebSocket disconnect
+- WhatsApp clients are destroyed 5 minutes after WebSocket disconnect (in-memory only; persisted state is untouched)
 
 ### Scaling Limitations
 - Sessions are stored in-memory (not shared across instances)
 - WhatsApp clients are process-bound (cannot be distributed)
+- Persisted state is file-based (single-node filesystem)
 - Single-instance deployment is the intended architecture
 
 ### CI/CD

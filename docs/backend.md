@@ -12,6 +12,9 @@ The Express app initializes with the following middleware chain (in order):
 4. **Express Session** — In-memory store with 24-hour TTL, pruned every 24 hours
 5. **Custom CORS headers** — Explicit header pass-through for proxy setups
 6. **Winston logger** — JSON-formatted request logging to console
+7. **`uid` cookie middleware** — Assigns every browser a stable 48-char hex identifier (1 year, httpOnly), exposed to handlers as `req.uid`. All persisted on-disk state is keyed by this cookie because the express `sessionID` changes whenever the in-memory store is lost (e.g. restart)
+
+Environment variables are loaded via Node's built-in `--env-file=.env` flag in the `dev`/`serve` npm scripts (no dotenv dependency; production in Docker uses `docker run --env-file`).
 
 Key configuration:
 - Port: `8080`
@@ -30,30 +33,44 @@ Returns the current session state. Called by the frontend router guard on every 
 ```typescript
 {
   whatsappConnected: boolean,  // WhatsApp client in CONNECTED state
-  googleConnected: boolean,    // Google OAuth token cached
+  googleConnected: boolean,    // Google client cached, or rebuilt from the persisted refresh token
   enforcePayments: boolean,    // Payment gate enabled
   purchased: boolean           // User has valid purchase
 }
 ```
 
+On a `gauth` cache miss, `/status` attempts to rebuild the OAuth client from the refresh token persisted on disk (see `getOAuth2ClientFromStorage`), so the Google connection survives restarts and cache expiry.
+
 #### `GET /init_whatsapp`
 Initializes a new WhatsApp Web client. Destroys any existing client first.
 
 - Creates headless Chromium instance via Puppeteer
+- Uses `LocalAuth({ clientId: uid, dataPath: ".wwebjs_auth" })` — previously linked sessions restore from disk without a QR scan
 - Registers event handlers for QR code, loading, and ready states
 - Stores client in session cache
 
 **Response:** `{}`
 
-#### `POST /init_gapi`
-Stores the Google OAuth token received from the frontend.
+#### `GET /google_auth_start`
+Begins the server-side OAuth 2.0 authorization code flow: generates a CSRF `state`, builds the consent URL (`contacts` scope, `access_type=offline`, `prompt=consent`), and redirects the browser to Google. The redirect URI is built from the incoming request's protocol and host.
 
-**Request body:**
-```typescript
-{ token: GoogleOAuthAccessToken }
-```
+**Response:** `302` to `accounts.google.com`
 
-**Response:** Redirect to `/options`
+#### `GET /google_callback`
+Exchanges the authorization code for tokens after validating `state`. Persists the refresh token on disk (keyed by `uid`) and caches the authorized client in the session.
+
+**Response:** `302` to `/options` on success; `/?error=google_auth_denied|invalid_state|google_token_exchange_failed` on failure
+
+#### `POST /logout`
+Disconnects accounts. `scope` in the JSON body: `"whatsapp"`, `"google"`, or `"all"` (default).
+
+- **whatsapp** — destroys the client and deletes the on-disk `LocalAuth` session (`deleteWhatsAppAuth`), so the next connect requires a fresh QR scan
+- **google** — revokes the token at `oauth2.googleapis.com/revoke` and deletes the stored refresh token
+- Both — cancels pending WS cleanup, closes the WebSocket, clears session cache entries, rotates the session ID
+
+This is the **only** path that deletes persisted state.
+
+**Response:** `{}`
 
 #### `GET /init_sync`
 Starts the sync process asynchronously (fire-and-forget). Progress is communicated via WebSocket.
@@ -95,7 +112,7 @@ const wwebVersion = "2.2407.3";
 
 ### Client Lifecycle
 
-`initWhatsApp(sessionID)` creates a new `Client` with these event handlers:
+`initWhatsApp(sessionID, uid)` creates a new `Client` with a `LocalAuth` strategy keyed by `uid` (sessions persist under `.wwebjs_auth/session-<uid>`) and these event handlers:
 
 | Event | Behavior |
 |-------|----------|
@@ -112,15 +129,20 @@ const wwebVersion = "2.2407.3";
 
 ### Photo Download
 
-`downloadFile(client, whatsappId)` returns a Base64-encoded profile picture, or `null` if the contact has no photo. Uses `MessageMedia.fromUrl()` internally.
+`downloadFile(client, whatsappId)` returns a Base64-encoded profile picture, or `null` if the contact has no photo (or resolution fails — errors are logged and swallowed so one bad contact can't abort a sync).
+
+Photo URLs are resolved via `resolveProfilePicUrl()`, which evaluates inside the WhatsApp Web page and tries three strategies in order: the contact model, the chat model, then the raw wid — `client.getProfilePicUrl()` alone fails for contacts without an open chat.
 
 ## Google API Module (`server/src/gapi.ts`)
 
-### OAuth Setup
+### OAuth Flow (server-side authorization code)
 
-`googleLogin(token)` creates an `OAuth2Client` with:
-- `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from environment
-- Credentials set from the frontend-provided token
+| Function | Purpose |
+|----------|---------|
+| `generateGoogleAuthUrl(redirectUri, state)` | Builds the consent URL (`contacts` scope, `access_type=offline`, `prompt=consent`) |
+| `getOAuth2ClientFromCode(uid, code, redirectUri)` | Exchanges the code for tokens, caches the client, persists the refresh token via `persist.ts` |
+| `getOAuth2ClientFromStorage(uid)` | Rebuilds an authorized client from the stored refresh token (returns `null` if none) |
+| `revokeGoogleAccess(uid)` | Revokes the grant at `oauth2.googleapis.com/revoke` and deletes the stored token |
 
 ### Contact Listing
 
@@ -130,14 +152,14 @@ const wwebVersion = "2.2407.3";
 
 **Filtering:**
 - Only contacts with phone numbers
-- Only canonical-form phone numbers (strips `+` prefix)
+- Numbers keep the E.164 `canonicalForm` when Google could parse them; otherwise the raw `value` is kept (so locally-formatted numbers can be normalized later against the user's region instead of being dropped)
 
 **Returns:** `SimpleContact[]`
 ```typescript
 interface SimpleContact {
   id: string;          // Google resourceName (e.g., "people/c123456")
   name?: string;       // Display name
-  numbers: string[];   // Canonical phone numbers without "+"
+  numbers: string[];   // E.164 canonicalForm or raw value
   hasPhoto: boolean;   // true if contact has a non-default photo
   photoUrl?: string;   // Primary photo URL
 }
@@ -145,7 +167,7 @@ interface SimpleContact {
 
 ### Photo Update
 
-`updateContactPhoto(auth, resourceName, photoBase64)` uploads a Base64-encoded image as the contact's photo. Errors are logged but not thrown.
+`updateContactPhoto(auth, resourceName, photoBase64)` uploads a Base64-encoded image as the contact's photo. Transient errors (HTTP 5xx, 429) are retried up to 5 times with linear backoff (2s, 4s, 6s, 8s); non-retryable errors and exhausted retries are **thrown**, so the sync engine's per-contact catch can log them and move on without counting the contact as synced.
 
 ## Sync Engine (`server/src/sync.ts`)
 
@@ -154,28 +176,31 @@ The sync engine is the core business logic. It runs asynchronously after `GET /i
 ### Algorithm
 
 1. **Load contacts** from both Google and WhatsApp
-2. **Shuffle** Google contacts (spreads progress across the UI)
-3. **Iterate** each Google contact:
+2. **Infer region** from the syncing user's own WhatsApp country code (`inferRegion`)
+3. **Shuffle** Google contacts (spreads progress across the UI)
+4. **Iterate** each Google contact (guarded by a per-contact try/catch so one failure can't kill the whole un-awaited run):
    - Skip contacts with existing photos (unless `overwrite_photos=true` or manual mode)
-   - Try to match each phone number against WhatsApp contacts
-   - Apply Brazilian number fallback if direct match fails
+   - For each phone number, try `matchCandidates(number, region)` — normalized E.164 plus country-specific legacy spellings — against the WhatsApp map
    - Download WhatsApp profile photo
    - In manual mode: send `SyncConfirm`, wait for `SyncPhotoConfirm` response (30s timeout)
-   - In auto mode: upload directly
+   - In auto mode: upload directly (with transient-error retry)
    - Send `SyncProgress` event
-4. **Complete** — send 100% progress, close WebSocket
+5. **Complete** — send 100% progress, close WebSocket
 
-### Phone Number Matching
+### Phone Number Matching (`server/src/phone.ts`)
+
+Normalization and candidate generation live in a dedicated module with unit tests (`phone.test.ts`, run via `npm test`):
 
 ```
-Google number: "5511987654321" (canonical, no +)
-WhatsApp map:  { "5511987654321" => "5511987654321@c.us" }
-
-Step 1: Direct lookup in WhatsApp map
-Step 2: If no match and starts with "55" (Brazil):
-  - 12 digits → insert "9" at position 4:  "551133334444" → "5511933334444"
-  - 13 digits → remove "9" at position 5:  "5511933334444" → "551133334444"
+Google number: "+55 11 3333-4444" (raw value without +CC)
+Step 1: Normalize with libphonenumber-js against the inferred region → E.164 digits
+Step 2: Generate candidates: the normalized form plus country-specific legacy
+        variants (e.g. country code 55: 12-digit spellings with the 9th digit
+        removed, 13-digit spellings with it inserted)
+Step 3: First candidate present in the WhatsApp contacts map wins
 ```
+
+The WhatsApp map is double-indexed (raw `contact.id.user` digits and their E.164 normalization) so either side can be in legacy format.
 
 ### Rate Limiting
 
@@ -193,8 +218,10 @@ It then waits up to 30 seconds for a `SyncPhotoConfirm` response with `{ accept:
 ## Cache System (`server/src/cache.ts`)
 
 ```typescript
-LRUCache({ max: 4096, ttl: 3600000 }) // 1 hour
+LRUCache({ max: 4096, ttl: 3600000, updateAgeOnGet: true }) // 1hr sliding TTL
 ```
+
+`updateAgeOnGet` slides the expiry window on every read, so sessions actively syncing don't get dropped after an hour.
 
 **Key format:** `{sessionID}-{key}`
 
@@ -203,11 +230,22 @@ LRUCache({ max: 4096, ttl: 3600000 }) // 1 hour
 | Key | Type | Description |
 |-----|------|-------------|
 | `whatsapp` | `Client` | WhatsApp Web.js client instance |
-| `gauth` | `OAuth2Client` | Google OAuth2 credentials |
+| `gauth` | `OAuth2Client` | Google OAuth2 credentials (rebuildable from disk) |
 | `ws` | `WebSocket` | Active WebSocket connection |
 | `email` | `string` | User email (for payment verification) |
 | `purchased` | `boolean` | Payment verification result |
 | `cleanup` | `Timeout` | Pending cleanup timer |
+| `oauth_state` | `string` | CSRF state for the OAuth flow (single use) |
+
+## Persistence Store (`server/src/persist.ts`)
+
+File-based store at `.data/persist.json`, keyed by the `uid` cookie. Holds the Google refresh token per user so the OAuth client can be rebuilt after restarts or cache expiry. Writes are atomic (temp file + rename). Deliberately file-based rather than Redis: single-node self-hosted app, and Redis is only wired up when `ENFORCE_PAYMENTS` is enabled.
+
+| Function | Purpose |
+|----------|---------|
+| `getGoogleRefreshToken(uid)` | Read the stored token (undefined if none) |
+| `setGoogleRefreshToken(uid, token)` | Persist the token |
+| `deleteGoogleRefreshToken(uid)` | Remove it (logout) |
 
 ## WebSocket Utilities (`server/src/ws.ts`)
 
@@ -246,6 +284,8 @@ Optional module, active when `ENFORCE_PAYMENTS=true`.
 The backend uses several error handling approaches:
 
 1. **Try-catch with WebSocket error events** (sync.ts) — errors during sync are sent to the frontend as `SyncProgress` events with an `error` field
-2. **Silent catch with logging** (gapi.ts) — photo update errors are logged but don't break the sync loop
-3. **No-op handlers** (whatsapp.ts `auth_failure`) — some events are silently consumed
-4. **Winston request logging** — all HTTP requests logged to console in JSON format
+2. **Per-contact isolation** (sync.ts) — each contact is wrapped in try/catch so one failure (e.g. a bad photo URL) is logged and skipped without aborting the whole un-awaited sync
+3. **Retry with backoff for transient upstream errors** (gapi.ts) — Google 5xx/429 responses are retried up to 5 times; permanent failures are rethrown so the contact is *not* counted as synced
+4. **Swallow-and-log for non-fatal failures** (whatsapp.ts photo download) — an unreadable/unavailable profile picture degrades to `null`
+5. **No-op handlers** (whatsapp.ts `auth_failure`) — some events are silently consumed
+6. **Winston request logging** — all HTTP requests logged to console in JSON format
