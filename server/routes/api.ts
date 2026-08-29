@@ -45,13 +45,6 @@ router.get("/", (req: Request, res: Response) => {
   res.send("{}");
 });
 
-router.get("/config", (req: Request, res: Response) => {
-  res.json({
-    clientId: process.env.GOOGLE_CLIENT_ID,
-    apiKey: process.env.GOOGLE_CLIENT_SECRET,
-  });
-});
-
 router.ws("/ws", (ws: WebSocket, req: Request) => {
   if (getFromCache(req.sessionID, "cleanup") !== undefined) {
     clearTimeout(getFromCache(req.sessionID, "cleanup"));
